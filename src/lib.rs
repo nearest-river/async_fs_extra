@@ -1,12 +1,16 @@
 macro_rules! err {
-    ($text:expr, $kind:expr) => {
-        return Err(Error::new($kind, $text))
-    };
+  ($text:expr, $kind:expr) => {
+    return Err(Error::new($kind, $text))
+  };
 
-    ($text:expr) => {
-        err!($text, ErrorKind::Other)
-    };
+  ($text:expr) => {
+    err!($text, ErrorKind::Other)
+  };
 }
+
+pub mod alias;
+use alias::*;
+use tokio::fs;
 
 /// The error type for fs_extra operations on files and directories.
 pub mod error;
@@ -187,69 +191,69 @@ use std::path::Path;
 ///  copy_items(&from_paths, "target", &options)?;
 /// ```
 ///
-pub fn copy_items<P, Q>(from: &[P], to: Q, options: &dir::CopyOptions) -> Result<u64>
+pub async fn copy_items<P, Q>(from: &[P], to: Q, options: &dir::CopyOptions) -> Result<u64>
 where
-    P: AsRef<Path>,
-    Q: AsRef<Path>,
+  P: AsRef<Path>,
+  Q: AsRef<Path>,
 {
-    let mut result: u64 = 0;
-    if options.content_only {
-        err!(
-            "Options 'content_only' not acccess for copy_items function",
-            ErrorKind::Other
-        );
+  let mut result: u64 = 0;
+  if options.content_only {
+    err!(
+      "Options 'content_only' not acccess for copy_items function",
+      ErrorKind::Other
+    );
+  }
+  for item in from {
+    let item = item.as_ref();
+    if is_dir(item).await {
+      result += dir::copy(item, &to, options).await?;
+    } else if let Some(file_name) = item.file_name() {
+      if let Some(file_name) = file_name.to_str() {
+        let file_options = file::CopyOptions {
+          overwrite: options.overwrite,
+          skip_exist: options.skip_exist,
+          ..Default::default()
+        };
+        result += file::copy(item, to.as_ref().join(file_name), &file_options).await?;
+      }
+    } else {
+      err!("Invalid file name", ErrorKind::InvalidFileName);
     }
-    for item in from {
-        let item = item.as_ref();
-        if item.is_dir() {
-            result += dir::copy(item, &to, options)?;
-        } else if let Some(file_name) = item.file_name() {
-            if let Some(file_name) = file_name.to_str() {
-                let file_options = file::CopyOptions {
-                    overwrite: options.overwrite,
-                    skip_exist: options.skip_exist,
-                    ..Default::default()
-                };
-                result += file::copy(item, to.as_ref().join(file_name), &file_options)?;
-            }
-        } else {
-            err!("Invalid file name", ErrorKind::InvalidFileName);
-        }
-    }
+  }
 
-    Ok(result)
+  Ok(result)
 }
 
 /// A structure which includes information about the current status of copying or moving a directory.
 pub struct TransitProcess {
-    /// Already copied bytes
-    pub copied_bytes: u64,
-    /// All the bytes which should be copied or moved (dir size).
-    pub total_bytes: u64,
-    /// Copied bytes on this time for file.
-    pub file_bytes_copied: u64,
-    /// Size of currently copied file.
-    pub file_total_bytes: u64,
-    /// Name of currently copied file.
-    pub file_name: String,
-    /// Name of currently copied folder.
-    pub dir_name: String,
-    /// Transit state
-    pub state: dir::TransitState,
+  /// Already copied bytes
+  pub copied_bytes: u64,
+  /// All the bytes which should be copied or moved (dir size).
+  pub total_bytes: u64,
+  /// Copied bytes on this time for file.
+  pub file_bytes_copied: u64,
+  /// Size of currently copied file.
+  pub file_total_bytes: u64,
+  /// Name of currently copied file.
+  pub file_name: String,
+  /// Name of currently copied folder.
+  pub dir_name: String,
+  /// Transit state
+  pub state: dir::TransitState,
 }
 
 impl Clone for TransitProcess {
-    fn clone(&self) -> TransitProcess {
-        TransitProcess {
-            copied_bytes: self.copied_bytes,
-            total_bytes: self.total_bytes,
-            file_bytes_copied: self.file_bytes_copied,
-            file_total_bytes: self.file_total_bytes,
-            file_name: self.file_name.clone(),
-            dir_name: self.dir_name.clone(),
-            state: self.state.clone(),
-        }
+  fn clone(&self) -> TransitProcess {
+    TransitProcess {
+      copied_bytes: self.copied_bytes,
+      total_bytes: self.total_bytes,
+      file_bytes_copied: self.file_bytes_copied,
+      file_total_bytes: self.file_total_bytes,
+      file_name: self.file_name.clone(),
+      dir_name: self.dir_name.clone(),
+      state: self.state.clone(),
     }
+  }
 }
 
 /// Copies a list of directories and files to another place recursively, with
@@ -286,180 +290,179 @@ impl Clone for TransitProcess {
 ///  copy_items_with_progress(&from_paths, "target", &options, handle)?;
 /// ```
 ///
-pub fn copy_items_with_progress<P, Q, F>(
-    from: &[P],
-    to: Q,
-    options: &dir::CopyOptions,
-    mut progress_handler: F,
+pub async fn copy_items_with_progress<P, Q, F>(
+  from: &[P],
+  to: Q,
+  options: &dir::CopyOptions,
+  mut progress_handler: F,
 ) -> Result<u64>
 where
-    P: AsRef<Path>,
-    Q: AsRef<Path>,
-    F: FnMut(TransitProcess) -> dir::TransitProcessResult,
+  P: AsRef<Path>,
+  Q: AsRef<Path>,
+  F: FnMut(TransitProcess) -> dir::TransitProcessResult,
 {
-    if options.content_only {
-        err!(
-            "Options 'content_only' not access for copy_items_with_progress function",
-            ErrorKind::Other
-        );
-    }
-    let mut total_size = 0;
-    let mut list_paths = Vec::new();
-    for item in from {
-        let item = item.as_ref();
-        total_size += dir::get_size(item)?;
-        list_paths.push(item);
-    }
+  if options.content_only {
+    err!(
+      "Options 'content_only' not access for copy_items_with_progress function",
+      ErrorKind::Other
+    );
+  }
+  let mut total_size = 0;
+  let mut list_paths = Vec::new();
+  for item in from {
+    let item = item.as_ref();
+    total_size += dir::get_size(item).await?;
+    list_paths.push(item);
+  }
 
-    let mut result: u64 = 0;
-    let mut info_process = TransitProcess {
-        copied_bytes: 0,
-        total_bytes: total_size,
-        file_bytes_copied: 0,
-        file_total_bytes: 0,
-        file_name: String::new(),
-        dir_name: String::new(),
-        state: dir::TransitState::Normal,
-    };
+  let mut result: u64 = 0;
+  let mut info_process = TransitProcess {
+    copied_bytes: 0,
+    total_bytes: total_size,
+    file_bytes_copied: 0,
+    file_total_bytes: 0,
+    file_name: String::new(),
+    dir_name: String::new(),
+    state: dir::TransitState::Normal,
+  };
 
-    let mut options = options.clone();
-    for item in list_paths {
-        if item.is_dir() {
-            if let Some(dir_name) = item.components().last() {
-                if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
-                    info_process.dir_name = dir_name;
-                } else {
-                    err!("Invalid folder from", ErrorKind::InvalidFolder);
-                }
-            } else {
-                err!("Invalid folder from", ErrorKind::InvalidFolder);
-            }
-
-            let copied_bytes = result;
-            let dir_options = options.clone();
-            let handler = |info: dir::TransitProcess| {
-                info_process.copied_bytes = copied_bytes + info.copied_bytes;
-                info_process.state = info.state;
-                let result = progress_handler(info_process.clone());
-                match result {
-                    dir::TransitProcessResult::OverwriteAll => options.overwrite = true,
-                    dir::TransitProcessResult::SkipAll => options.skip_exist = true,
-                    _ => {}
-                }
-                result
-            };
-            result += dir::copy_with_progress(item, &to, &dir_options, handler)?;
+  let mut options = options.clone();
+  for item in list_paths {
+    if is_dir(item).await {
+      if let Some(dir_name) = item.components().last() {
+        if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
+          info_process.dir_name = dir_name;
         } else {
-            let mut file_options = file::CopyOptions {
-                overwrite: options.overwrite,
-                skip_exist: options.skip_exist,
-                buffer_size: options.buffer_size,
-            };
-
-            if let Some(file_name) = item.file_name() {
-                if let Some(file_name) = file_name.to_str() {
-                    info_process.file_name = file_name.to_string();
-                } else {
-                    err!("Invalid file name", ErrorKind::InvalidFileName);
-                }
-            } else {
-                err!("Invalid file name", ErrorKind::InvalidFileName);
-            }
-
-            info_process.file_bytes_copied = 0;
-            info_process.file_total_bytes = item.metadata()?.len();
-
-            let copied_bytes = result;
-            let file_name = to.as_ref().join(info_process.file_name.clone());
-            let mut work = true;
-
-            let mut result_copy: Result<u64>;
-            while work {
-                {
-                    let handler = |info: file::TransitProcess| {
-                        info_process.copied_bytes = copied_bytes + info.copied_bytes;
-                        info_process.file_bytes_copied = info.copied_bytes;
-                        progress_handler(info_process.clone());
-                    };
-                    result_copy =
-                        file::copy_with_progress(item, &file_name, &file_options, handler);
-                }
-                match result_copy {
-                    Ok(val) => {
-                        result += val;
-                        work = false;
-                    }
-                    Err(err) => match err.kind {
-                        ErrorKind::AlreadyExists => {
-                            let mut info_process = info_process.clone();
-                            info_process.state = dir::TransitState::Exists;
-                            let user_decide = progress_handler(info_process);
-                            match user_decide {
-                                dir::TransitProcessResult::Overwrite => {
-                                    file_options.overwrite = true;
-                                }
-                                dir::TransitProcessResult::OverwriteAll => {
-                                    file_options.overwrite = true;
-                                    options.overwrite = true;
-                                }
-                                dir::TransitProcessResult::Skip => {
-                                    file_options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::SkipAll => {
-                                    file_options.skip_exist = true;
-                                    options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::Retry => {}
-                                dir::TransitProcessResult::ContinueOrAbort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                                dir::TransitProcessResult::Abort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                            }
-                        }
-                        ErrorKind::PermissionDenied => {
-                            let mut info_process = info_process.clone();
-                            info_process.state = dir::TransitState::Exists;
-                            let user_decide = progress_handler(info_process);
-                            match user_decide {
-                                dir::TransitProcessResult::Overwrite => {
-                                    err!("Overwrite denied for this situation!", ErrorKind::Other);
-                                }
-                                dir::TransitProcessResult::OverwriteAll => {
-                                    err!("Overwrite denied for this situation!", ErrorKind::Other);
-                                }
-                                dir::TransitProcessResult::Skip => {
-                                    file_options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::SkipAll => {
-                                    file_options.skip_exist = true;
-                                    options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::Retry => {}
-                                dir::TransitProcessResult::ContinueOrAbort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                                dir::TransitProcessResult::Abort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                            }
-                        }
-                        _ => {
-                            let err_msg = err.to_string();
-                            err!(err_msg.as_str(), err.kind)
-                        }
-                    },
-                }
-            }
+          err!("Invalid folder from", ErrorKind::InvalidFolder);
         }
-    }
+      } else {
+        err!("Invalid folder from", ErrorKind::InvalidFolder);
+      }
 
-    Ok(result)
+      let copied_bytes = result;
+      let dir_options = options.clone();
+      let handler = |info: dir::TransitProcess| {
+        info_process.copied_bytes = copied_bytes + info.copied_bytes;
+        info_process.state = info.state;
+        let result = progress_handler(info_process.clone());
+        match result {
+          dir::TransitProcessResult::OverwriteAll => options.overwrite = true,
+          dir::TransitProcessResult::SkipAll => options.skip_exist = true,
+          _ => {}
+        }
+        result
+      };
+      result += dir::copy_with_progress(item, &to, &dir_options, handler).await?;
+    } else {
+      let mut file_options = file::CopyOptions {
+        overwrite: options.overwrite,
+        skip_exist: options.skip_exist,
+        buffer_size: options.buffer_size,
+      };
+
+      if let Some(file_name) = item.file_name() {
+        if let Some(file_name) = file_name.to_str() {
+          info_process.file_name = file_name.to_string();
+        } else {
+          err!("Invalid file name", ErrorKind::InvalidFileName);
+        }
+      } else {
+        err!("Invalid file name", ErrorKind::InvalidFileName);
+      }
+
+      info_process.file_bytes_copied = 0;
+      info_process.file_total_bytes = fs::metadata(&item).await?.len();
+
+      let copied_bytes = result;
+      let file_name = to.as_ref().join(info_process.file_name.clone());
+      let mut work = true;
+
+      let mut result_copy: Result<u64>;
+      while work {
+        {
+          let handler = |info: file::TransitProcess| {
+            info_process.copied_bytes = copied_bytes + info.copied_bytes;
+            info_process.file_bytes_copied = info.copied_bytes;
+            progress_handler(info_process.clone());
+          };
+          result_copy = file::copy_with_progress(item, &file_name, &file_options, handler).await;
+        }
+        match result_copy {
+          Ok(val) => {
+            result += val;
+            work = false;
+          }
+          Err(err) => match err.kind {
+            ErrorKind::AlreadyExists => {
+              let mut info_process = info_process.clone();
+              info_process.state = dir::TransitState::Exists;
+              let user_decide = progress_handler(info_process);
+              match user_decide {
+                dir::TransitProcessResult::Overwrite => {
+                  file_options.overwrite = true;
+                }
+                dir::TransitProcessResult::OverwriteAll => {
+                  file_options.overwrite = true;
+                  options.overwrite = true;
+                }
+                dir::TransitProcessResult::Skip => {
+                  file_options.skip_exist = true;
+                }
+                dir::TransitProcessResult::SkipAll => {
+                  file_options.skip_exist = true;
+                  options.skip_exist = true;
+                }
+                dir::TransitProcessResult::Retry => {}
+                dir::TransitProcessResult::ContinueOrAbort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+                dir::TransitProcessResult::Abort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+              }
+            }
+            ErrorKind::PermissionDenied => {
+              let mut info_process = info_process.clone();
+              info_process.state = dir::TransitState::Exists;
+              let user_decide = progress_handler(info_process);
+              match user_decide {
+                dir::TransitProcessResult::Overwrite => {
+                  err!("Overwrite denied for this situation!", ErrorKind::Other);
+                }
+                dir::TransitProcessResult::OverwriteAll => {
+                  err!("Overwrite denied for this situation!", ErrorKind::Other);
+                }
+                dir::TransitProcessResult::Skip => {
+                  file_options.skip_exist = true;
+                }
+                dir::TransitProcessResult::SkipAll => {
+                  file_options.skip_exist = true;
+                  options.skip_exist = true;
+                }
+                dir::TransitProcessResult::Retry => {}
+                dir::TransitProcessResult::ContinueOrAbort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+                dir::TransitProcessResult::Abort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+              }
+            }
+            _ => {
+              let err_msg = err.to_string();
+              err!(err_msg.as_str(), err.kind)
+            }
+          },
+        }
+      }
+    }
+  }
+
+  Ok(result)
 }
 
 /// Moves a list of directories and files to another place recursively. This function will
@@ -493,75 +496,75 @@ where
 ///  move_items(&from_paths, "target", &options)?;
 /// ```
 ///
-pub fn move_items<P, Q>(from_items: &[P], to: Q, options: &dir::CopyOptions) -> Result<u64>
+pub async fn move_items<P, Q>(from_items: &[P], to: Q, options: &dir::CopyOptions) -> Result<u64>
 where
-    P: AsRef<Path>,
-    Q: AsRef<Path>,
+  P: AsRef<Path>,
+  Q: AsRef<Path>,
 {
-    if options.content_only {
-        err!(
-            "Options 'content_only' not access for move_items function",
-            ErrorKind::Other
-        );
-    }
-    let mut total_size = 0;
-    let mut list_paths = Vec::new();
-    for item in from_items {
-        let item = item.as_ref();
-        total_size += dir::get_size(item)?;
-        list_paths.push(item);
-    }
+  if options.content_only {
+    err!(
+      "Options 'content_only' not access for move_items function",
+      ErrorKind::Other
+    );
+  }
+  let mut total_size = 0;
+  let mut list_paths = Vec::new();
+  for item in from_items {
+    let item = item.as_ref();
+    total_size += dir::get_size(item).await?;
+    list_paths.push(item);
+  }
 
-    let mut result = 0;
-    let mut info_process = TransitProcess {
-        copied_bytes: 0,
-        total_bytes: total_size,
-        file_bytes_copied: 0,
-        file_total_bytes: 0,
-        file_name: String::new(),
-        dir_name: String::new(),
-        state: dir::TransitState::Normal,
-    };
+  let mut result = 0;
+  let mut info_process = TransitProcess {
+    copied_bytes: 0,
+    total_bytes: total_size,
+    file_bytes_copied: 0,
+    file_total_bytes: 0,
+    file_name: String::new(),
+    dir_name: String::new(),
+    state: dir::TransitState::Normal,
+  };
 
-    for item in list_paths {
-        if item.is_dir() {
-            if let Some(dir_name) = item.components().last() {
-                if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
-                    info_process.dir_name = dir_name;
-                } else {
-                    err!("Invalid folder from", ErrorKind::InvalidFolder);
-                }
-            } else {
-                err!("Invalid folder from", ErrorKind::InvalidFolder);
-            }
-
-            result += dir::move_dir(item, &to, options)?;
+  for item in list_paths {
+    if is_dir(item).await {
+      if let Some(dir_name) = item.components().last() {
+        if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
+          info_process.dir_name = dir_name;
         } else {
-            let file_options = file::CopyOptions {
-                overwrite: options.overwrite,
-                skip_exist: options.skip_exist,
-                buffer_size: options.buffer_size,
-            };
-
-            if let Some(file_name) = item.file_name() {
-                if let Some(file_name) = file_name.to_str() {
-                    info_process.file_name = file_name.to_string();
-                } else {
-                    err!("Invalid file name", ErrorKind::InvalidFileName);
-                }
-            } else {
-                err!("Invalid file name", ErrorKind::InvalidFileName);
-            }
-
-            info_process.file_bytes_copied = 0;
-            info_process.file_total_bytes = item.metadata()?.len();
-
-            let file_name = to.as_ref().join(info_process.file_name.clone());
-            result += file::move_file(item, &file_name, &file_options)?;
+          err!("Invalid folder from", ErrorKind::InvalidFolder);
         }
-    }
+      } else {
+        err!("Invalid folder from", ErrorKind::InvalidFolder);
+      }
 
-    Ok(result)
+      result += dir::move_dir(item, &to, options).await?;
+    } else {
+      let file_options = file::CopyOptions {
+        overwrite: options.overwrite,
+        skip_exist: options.skip_exist,
+        buffer_size: options.buffer_size,
+      };
+
+      if let Some(file_name) = item.file_name() {
+        if let Some(file_name) = file_name.to_str() {
+          info_process.file_name = file_name.to_string();
+        } else {
+          err!("Invalid file name", ErrorKind::InvalidFileName);
+        }
+      } else {
+        err!("Invalid file name", ErrorKind::InvalidFileName);
+      }
+
+      info_process.file_bytes_copied = 0;
+      info_process.file_total_bytes = fs::metadata(item).await?.len();
+
+      let file_name = to.as_ref().join(info_process.file_name.clone());
+      result += file::move_file(item, &file_name, &file_options).await?;
+    }
+  }
+
+  Ok(result)
 }
 
 /// Moves a list of directories and files to another place recursively, with
@@ -598,179 +601,178 @@ where
 ///  move_items_with_progress(&from_paths, "target", &options, handle)?;
 /// ```
 ///
-pub fn move_items_with_progress<P, Q, F>(
-    from_items: &[P],
-    to: Q,
-    options: &dir::CopyOptions,
-    mut progress_handler: F,
+pub async fn move_items_with_progress<P, Q, F>(
+  from_items: &[P],
+  to: Q,
+  options: &dir::CopyOptions,
+  mut progress_handler: F,
 ) -> Result<u64>
 where
-    P: AsRef<Path>,
-    Q: AsRef<Path>,
-    F: FnMut(TransitProcess) -> dir::TransitProcessResult,
+  P: AsRef<Path>,
+  Q: AsRef<Path>,
+  F: FnMut(TransitProcess) -> dir::TransitProcessResult,
 {
-    if options.content_only {
-        err!(
-            "Options 'content_only' not access for move_items_with_progress function",
-            ErrorKind::Other
-        );
-    }
-    let mut total_size = 0;
-    let mut list_paths = Vec::new();
-    for item in from_items {
-        let item = item.as_ref();
-        total_size += dir::get_size(item)?;
-        list_paths.push(item);
-    }
+  if options.content_only {
+    err!(
+      "Options 'content_only' not access for move_items_with_progress function",
+      ErrorKind::Other
+    );
+  }
+  let mut total_size = 0;
+  let mut list_paths = Vec::new();
+  for item in from_items {
+    let item = item.as_ref();
+    total_size += dir::get_size(item).await?;
+    list_paths.push(item);
+  }
 
-    let mut result = 0;
-    let mut info_process = TransitProcess {
-        copied_bytes: 0,
-        total_bytes: total_size,
-        file_bytes_copied: 0,
-        file_total_bytes: 0,
-        file_name: String::new(),
-        dir_name: String::new(),
-        state: dir::TransitState::Normal,
-    };
-    let mut options = options.clone();
+  let mut result = 0;
+  let mut info_process = TransitProcess {
+    copied_bytes: 0,
+    total_bytes: total_size,
+    file_bytes_copied: 0,
+    file_total_bytes: 0,
+    file_name: String::new(),
+    dir_name: String::new(),
+    state: dir::TransitState::Normal,
+  };
+  let mut options = options.clone();
 
-    for item in list_paths {
-        if item.is_dir() {
-            if let Some(dir_name) = item.components().last() {
-                if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
-                    info_process.dir_name = dir_name;
-                } else {
-                    err!("Invalid folder from", ErrorKind::InvalidFolder);
-                }
-            } else {
-                err!("Invalid folder from", ErrorKind::InvalidFolder);
-            }
-
-            let copied_bytes = result;
-            let dir_options = options.clone();
-            let handler = |info: dir::TransitProcess| {
-                info_process.copied_bytes = copied_bytes + info.copied_bytes;
-                info_process.state = info.state;
-                let result = progress_handler(info_process.clone());
-                match result {
-                    dir::TransitProcessResult::OverwriteAll => options.overwrite = true,
-                    dir::TransitProcessResult::SkipAll => options.skip_exist = true,
-                    _ => {}
-                }
-                result
-            };
-            result += dir::move_dir_with_progress(item, &to, &dir_options, handler)?;
+  for item in list_paths {
+    if is_dir(item).await {
+      if let Some(dir_name) = item.components().last() {
+        if let Ok(dir_name) = dir_name.as_os_str().to_os_string().into_string() {
+          info_process.dir_name = dir_name;
         } else {
-            let mut file_options = file::CopyOptions {
-                overwrite: options.overwrite,
-                skip_exist: options.skip_exist,
-                buffer_size: options.buffer_size,
-            };
-
-            if let Some(file_name) = item.file_name() {
-                if let Some(file_name) = file_name.to_str() {
-                    info_process.file_name = file_name.to_string();
-                } else {
-                    err!("Invalid file name", ErrorKind::InvalidFileName);
-                }
-            } else {
-                err!("Invalid file name", ErrorKind::InvalidFileName);
-            }
-
-            info_process.file_bytes_copied = 0;
-            info_process.file_total_bytes = item.metadata()?.len();
-
-            let copied_bytes = result;
-            let file_name = to.as_ref().join(info_process.file_name.clone());
-            let mut work = true;
-
-            let mut result_copy: Result<u64>;
-            while work {
-                {
-                    let handler = |info: file::TransitProcess| {
-                        info_process.copied_bytes = copied_bytes + info.copied_bytes;
-                        info_process.file_bytes_copied = info.copied_bytes;
-                        progress_handler(info_process.clone());
-                    };
-                    result_copy =
-                        file::move_file_with_progress(item, &file_name, &file_options, handler);
-                }
-                match result_copy {
-                    Ok(val) => {
-                        result += val;
-                        work = false;
-                    }
-                    Err(err) => match err.kind {
-                        ErrorKind::AlreadyExists => {
-                            let mut info_process = info_process.clone();
-                            info_process.state = dir::TransitState::Exists;
-                            let user_decide = progress_handler(info_process);
-                            match user_decide {
-                                dir::TransitProcessResult::Overwrite => {
-                                    file_options.overwrite = true;
-                                }
-                                dir::TransitProcessResult::OverwriteAll => {
-                                    file_options.overwrite = true;
-                                    options.overwrite = true;
-                                }
-                                dir::TransitProcessResult::Skip => {
-                                    file_options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::SkipAll => {
-                                    file_options.skip_exist = true;
-                                    options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::Retry => {}
-                                dir::TransitProcessResult::ContinueOrAbort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                                dir::TransitProcessResult::Abort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                            }
-                        }
-                        ErrorKind::PermissionDenied => {
-                            let mut info_process = info_process.clone();
-                            info_process.state = dir::TransitState::Exists;
-                            let user_decide = progress_handler(info_process);
-                            match user_decide {
-                                dir::TransitProcessResult::Overwrite => {
-                                    err!("Overwrite denied for this situation!", ErrorKind::Other);
-                                }
-                                dir::TransitProcessResult::OverwriteAll => {
-                                    err!("Overwrite denied for this situation!", ErrorKind::Other);
-                                }
-                                dir::TransitProcessResult::Skip => {
-                                    file_options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::SkipAll => {
-                                    file_options.skip_exist = true;
-                                    options.skip_exist = true;
-                                }
-                                dir::TransitProcessResult::Retry => {}
-                                dir::TransitProcessResult::ContinueOrAbort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                                dir::TransitProcessResult::Abort => {
-                                    let err_msg = err.to_string();
-                                    err!(err_msg.as_str(), err.kind)
-                                }
-                            }
-                        }
-                        _ => {
-                            let err_msg = err.to_string();
-                            err!(err_msg.as_str(), err.kind)
-                        }
-                    },
-                }
-            }
+          err!("Invalid folder from", ErrorKind::InvalidFolder);
         }
+      } else {
+        err!("Invalid folder from", ErrorKind::InvalidFolder);
+      }
+
+      let copied_bytes = result;
+      let dir_options = options.clone();
+      let handler = |info: dir::TransitProcess| {
+        info_process.copied_bytes = copied_bytes + info.copied_bytes;
+        info_process.state = info.state;
+        let result = progress_handler(info_process.clone());
+        match result {
+          dir::TransitProcessResult::OverwriteAll => options.overwrite = true,
+          dir::TransitProcessResult::SkipAll => options.skip_exist = true,
+          _ => {}
+        }
+        result
+      };
+      result += dir::move_dir_with_progress(item, &to, &dir_options, handler).await?;
+    } else {
+      let mut file_options = file::CopyOptions {
+        overwrite: options.overwrite,
+        skip_exist: options.skip_exist,
+        buffer_size: options.buffer_size,
+      };
+
+      if let Some(file_name) = item.file_name() {
+        if let Some(file_name) = file_name.to_str() {
+          info_process.file_name = file_name.to_string();
+        } else {
+          err!("Invalid file name", ErrorKind::InvalidFileName);
+        }
+      } else {
+        err!("Invalid file name", ErrorKind::InvalidFileName);
+      }
+
+      info_process.file_bytes_copied = 0;
+      info_process.file_total_bytes = fs::metadata(item).await?.len();
+
+      let copied_bytes = result;
+      let file_name = to.as_ref().join(info_process.file_name.clone());
+      let mut work = true;
+
+      let mut result_copy: Result<u64>;
+      while work {
+        {
+          let handler = |info: file::TransitProcess| {
+            info_process.copied_bytes = copied_bytes + info.copied_bytes;
+            info_process.file_bytes_copied = info.copied_bytes;
+            progress_handler(info_process.clone());
+          };
+          result_copy = file::move_file_with_progress(item, &file_name, &file_options, handler).await;
+        }
+        match result_copy {
+          Ok(val) => {
+            result += val;
+            work = false;
+          }
+          Err(err) => match err.kind {
+            ErrorKind::AlreadyExists => {
+              let mut info_process = info_process.clone();
+              info_process.state = dir::TransitState::Exists;
+              let user_decide = progress_handler(info_process);
+              match user_decide {
+                dir::TransitProcessResult::Overwrite => {
+                  file_options.overwrite = true;
+                }
+                dir::TransitProcessResult::OverwriteAll => {
+                  file_options.overwrite = true;
+                  options.overwrite = true;
+                }
+                dir::TransitProcessResult::Skip => {
+                  file_options.skip_exist = true;
+                }
+                dir::TransitProcessResult::SkipAll => {
+                  file_options.skip_exist = true;
+                  options.skip_exist = true;
+                }
+                dir::TransitProcessResult::Retry => {}
+                dir::TransitProcessResult::ContinueOrAbort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+                dir::TransitProcessResult::Abort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+              }
+            }
+            ErrorKind::PermissionDenied => {
+              let mut info_process = info_process.clone();
+              info_process.state = dir::TransitState::Exists;
+              let user_decide = progress_handler(info_process);
+              match user_decide {
+                dir::TransitProcessResult::Overwrite => {
+                  err!("Overwrite denied for this situation!", ErrorKind::Other);
+                }
+                dir::TransitProcessResult::OverwriteAll => {
+                  err!("Overwrite denied for this situation!", ErrorKind::Other);
+                }
+                dir::TransitProcessResult::Skip => {
+                  file_options.skip_exist = true;
+                }
+                dir::TransitProcessResult::SkipAll => {
+                  file_options.skip_exist = true;
+                  options.skip_exist = true;
+                }
+                dir::TransitProcessResult::Retry => {}
+                dir::TransitProcessResult::ContinueOrAbort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+                dir::TransitProcessResult::Abort => {
+                  let err_msg = err.to_string();
+                  err!(err_msg.as_str(), err.kind)
+                }
+              }
+            }
+            _ => {
+              let err_msg = err.to_string();
+              err!(err_msg.as_str(), err.kind)
+            }
+          },
+        }
+      }
     }
-    Ok(result)
+  }
+  Ok(result)
 }
 
 /// Removes a list of files or directories.
@@ -785,18 +787,18 @@ where
 ///  remove_items(&from_paths).unwrap();
 /// ```
 ///
-pub fn remove_items<P>(from_items: &[P]) -> Result<()>
+pub async fn remove_items<P>(from_items: &[P]) -> Result<()>
 where
-    P: AsRef<Path>,
+  P: AsRef<Path>,
 {
-    for item in from_items {
-        let item = item.as_ref();
-        if item.is_dir() {
-            dir::remove(item)?;
-        } else {
-            file::remove(item)?
-        }
+  for item in from_items {
+    let item = item.as_ref();
+    if item.is_dir() {
+      dir::remove(item).await?;
+    } else {
+      file::remove(item).await?
     }
+  }
 
-    Ok(())
+  Ok(())
 }
