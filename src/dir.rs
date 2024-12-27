@@ -373,7 +373,7 @@ where
     item.insert(DirEntryAttr::DosPath, DirEntryValue::String(path));
   }
   if config.contains(&DirEntryAttr::Size) {
-    item.insert(DirEntryAttr::Size, DirEntryValue::U64(get_size(&path)?));
+    item.insert(DirEntryAttr::Size, DirEntryValue::U64(get_size(&path).await?));
   }
   if config.contains(&DirEntryAttr::FileSize) {
     item.insert(DirEntryAttr::FileSize, DirEntryValue::U64(metadata.len()));
@@ -500,7 +500,7 @@ where
   P: AsRef<Path>,
 {
   if erase && fs::try_exists(&path).await? {
-    remove(&path)?;
+    remove(&path).await?;
   }
   Ok(fs::create_dir(&path).await?)
 }
@@ -534,7 +534,7 @@ where
   P: AsRef<Path>,
 {
   if erase && fs::try_exists(&path).await? {
-    remove(&path)?;
+    remove(&path).await?;
   }
   Ok(fs::create_dir_all(&path).await?)
 }
@@ -1147,7 +1147,7 @@ where
     let mut work = true;
     while work {
       {
-        result_copy = super::file::move_file(&file, &path, &file_options);
+        result_copy = super::file::move_file(&file, &path, &file_options).await;
         match result_copy {
           Ok(val) => {
             result += val;
@@ -1306,7 +1306,7 @@ where
         };
 
         result_copy =
-          super::file::move_file_with_progress(&file, &path, &file_options, _progress_handler);
+          super::file::move_file_with_progress(&file, &path, &file_options, _progress_handler).await;
       }
       match result_copy {
         Ok(val) => {

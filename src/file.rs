@@ -408,7 +408,7 @@ where
 /// write_all("foo.txt", "contents" )?; // Create file foo.txt and send content inside
 ///
 /// ```
-pub async  fn write_all<P>(path: P, content: &str) -> Result<()>
+pub async fn write_all<P>(path: P, content: &str) -> Result<()>
 where
   P: AsRef<Path>,
 {
